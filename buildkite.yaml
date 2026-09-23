@@ -1,6 +1,7 @@
 env:
   TF_IN_AUTOMATION: "true"
   TF_VERSION: "1.15.8"
+  CHECKPOINT_DISABLE: "1"   # skip terraform's "out of date" check
 
 # Shell logic lives in .buildkite/scripts/ because `pipeline upload` replaces
 # variables in this file at upload time. Each step runs in a fresh shell, so the
