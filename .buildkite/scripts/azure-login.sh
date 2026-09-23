@@ -3,8 +3,24 @@
 # Must be sourced so the exports reach the calling step.
 set -euo pipefail
 
-AZURE_CLIENT_ID=$(buildkite-agent secret get AZURE_CLIENT_ID)
-AZURE_TENANT_ID=$(buildkite-agent secret get AZURE_TENANT_ID)
+# Strip stray whitespace/quotes that often sneak in when pasting secrets
+clean() { printf '%s' "$1" | tr -d '[:space:]"'"'"; }
+AZURE_CLIENT_ID=$(clean "$(buildkite-agent secret get AZURE_CLIENT_ID)")
+AZURE_TENANT_ID=$(clean "$(buildkite-agent secret get AZURE_TENANT_ID)")
+
+GUID_RE='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+for name in AZURE_CLIENT_ID AZURE_TENANT_ID; do
+  if [[ ! "${!name}" =~ $GUID_RE ]]; then
+    value="${!name}"
+    echo "Secret $name is not a GUID (got ${#value} characters, expected 36)."
+    echo "Expected format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+    exit 1
+  fi
+done
+if [[ "$AZURE_CLIENT_ID" == "$AZURE_TENANT_ID" ]]; then
+  echo "AZURE_CLIENT_ID and AZURE_TENANT_ID have the same value; one of them is wrong."
+  exit 1
+fi
 TOKEN=$(buildkite-agent oidc request-token --audience "api://AzureADTokenExchange")
 
 # Subscription: use the AZURE_SUBSCRIPTION_ID secret if it exists,
