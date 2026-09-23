@@ -1,0 +1,62 @@
+env:
+  TF_DIR: "terraform"
+  TF_IN_AUTOMATION: "true"
+
+# Each Buildkite step runs in a fresh shell, so the login does not carry over
+# between steps. This anchor is reused at the start of every step.
+azure_login: &azure_login |
+  set -euo pipefail
+  export AZURE_CLIENT_ID=$(buildkite-agent secret get AZURE_CLIENT_ID)
+  export AZURE_TENANT_ID=$(buildkite-agent secret get AZURE_TENANT_ID)
+  TOKEN=$(buildkite-agent oidc request-token --audience "api://AzureADTokenExchange")
+  az login --service-principal \
+    --username "$AZURE_CLIENT_ID" \
+    --tenant "$AZURE_TENANT_ID" \
+    --federated-token "$TOKEN" \
+    --output none
+  az account show
+
+  # Same OIDC credentials for the Terraform azurerm provider and backend
+  export ARM_USE_OIDC=true
+  export ARM_CLIENT_ID="$AZURE_CLIENT_ID"
+  export ARM_TENANT_ID="$AZURE_TENANT_ID"
+  export ARM_OIDC_TOKEN="$TOKEN"
+  export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+
+# Backend settings live in terraform/backend.tf
+terraform_init: &terraform_init |
+  terraform -chdir="$TF_DIR" init -input=false
+
+steps:
+  - label: ":terraform: fmt & validate"
+    key: "validate"
+    commands:
+      - terraform -chdir="$TF_DIR" fmt -check -recursive
+      - terraform -chdir="$TF_DIR" init -backend=false -input=false
+      - terraform -chdir="$TF_DIR" validate
+
+  - label: ":terraform: plan"
+    key: "plan"
+    depends_on: "validate"
+    commands:
+      - *azure_login
+      - *terraform_init
+      - terraform -chdir="$TF_DIR" plan -input=false -out=tfplan
+    artifact_paths:
+      - "terraform/tfplan"
+
+  - block: ":rocket: Apply storage account?"
+    key: "approve"
+    depends_on: "plan"
+    branches: "main"
+
+  - label: ":terraform: apply"
+    key: "apply"
+    depends_on: "approve"
+    branches: "main"
+    commands:
+      - *azure_login
+      - *terraform_init
+      - buildkite-agent artifact download "terraform/tfplan" .
+      - terraform -chdir="$TF_DIR" apply -input=false tfplan
+      - terraform -chdir="$TF_DIR" output
