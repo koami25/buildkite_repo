@@ -21,7 +21,11 @@ if [[ "$AZURE_CLIENT_ID" == "$AZURE_TENANT_ID" ]]; then
   echo "AZURE_CLIENT_ID and AZURE_TENANT_ID have the same value; one of them is wrong."
   exit 1
 fi
-TOKEN=$(buildkite-agent oidc request-token --audience "api://AzureADTokenExchange")
+# sub = cluster UUID, so one federated credential on the managed identity
+# covers every pipeline in the cluster (Azure needs an exact subject match).
+TOKEN=$(buildkite-agent oidc request-token \
+  --audience "api://AzureADTokenExchange" \
+  --subject-claim cluster_id)
 
 # Subscription: use the AZURE_SUBSCRIPTION_ID secret if it exists,
 # otherwise look up the one subscription the service principal can see.
