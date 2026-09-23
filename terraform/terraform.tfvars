@@ -1,5 +1,0 @@
-location             = "southcentralus"
-resource_group_name  = "rg-buildkite-storage"
-storage_account_name = "stbuildkitedemo001"
-account_tier         = "Standard"
-replication_type     = "LRS"

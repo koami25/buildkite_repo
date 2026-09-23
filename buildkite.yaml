@@ -1,45 +1,113 @@
+# Storage account delivery pipeline: dev -> uat -> prod
+#
+#   any branch : validate + plan for every environment (no changes applied)
+#   main       : dev applies automatically, uat and prod need manual approval,
+#                and each environment only deploys after the previous one succeeded
+#
+# Shell logic lives in .buildkite/scripts/ because `pipeline upload` replaces
+# variables in this file at upload time.
+
 env:
   TF_IN_AUTOMATION: "true"
   TF_VERSION: "1.15.8"
-  CHECKPOINT_DISABLE: "1"   # skip terraform's "out of date" check
-
-# Shell logic lives in .buildkite/scripts/ because `pipeline upload` replaces
-# variables in this file at upload time. Each step runs in a fresh shell, so the
-# scripts are sourced at the start of every step.
+  CHECKPOINT_DISABLE: "1"
 
 steps:
-  - label: ":terraform: fmt & validate"
+  - label: ":terraform: validate"
     key: "validate"
-    commands:
-      - source .buildkite/scripts/install-terraform.sh
-      - terraform -chdir=terraform fmt -check -recursive
-      - terraform -chdir=terraform init -backend=false -input=false
-      - terraform -chdir=terraform validate
+    command: "bash .buildkite/scripts/tf-validate.sh"
+    timeout_in_minutes: 10
+    retry:
+      automatic:
+        - exit_status: -1   # agent lost
+          limit: 2
 
-  - label: ":terraform: plan"
-    key: "plan"
-    depends_on: "validate"
-    commands:
-      - source .buildkite/scripts/install-terraform.sh
-      - source .buildkite/scripts/azure-login.sh
-      - terraform -chdir=terraform init -input=false
-      - terraform -chdir=terraform plan -input=false -out=tfplan
-    artifact_paths:
-      - "terraform/tfplan"
+  # ---------------------------------------------------------------- DEV
+  - group: ":large_green_circle: dev"
+    key: "dev"
+    steps:
+      - label: ":terraform: plan dev"
+        key: "plan-dev"
+        depends_on: "validate"
+        command: "bash .buildkite/scripts/tf.sh dev plan"
+        timeout_in_minutes: 20
+        retry:
+          automatic:
+            - exit_status: -1
+              limit: 2
 
-  - block: ":rocket: Apply storage account?"
-    key: "approve"
-    depends_on: "plan"
-    branches: "main"
+      - label: ":rocket: apply dev"
+        key: "apply-dev"
+        depends_on: "plan-dev"
+        branches: "main"
+        command: "bash .buildkite/scripts/tf.sh dev apply"
+        timeout_in_minutes: 30
+        concurrency: 1
+        concurrency_group: "bkdemo-storage/dev"
 
-  - label: ":terraform: apply"
-    key: "apply"
-    depends_on: "approve"
-    branches: "main"
-    commands:
-      - source .buildkite/scripts/install-terraform.sh
-      - source .buildkite/scripts/azure-login.sh
-      - terraform -chdir=terraform init -input=false
-      - buildkite-agent artifact download "terraform/tfplan" .
-      - terraform -chdir=terraform apply -input=false tfplan
-      - terraform -chdir=terraform output
+  # ---------------------------------------------------------------- UAT
+  - group: ":large_yellow_circle: uat"
+    key: "uat"
+    steps:
+      - label: ":terraform: plan uat"
+        key: "plan-uat"
+        depends_on: "validate"
+        command: "bash .buildkite/scripts/tf.sh uat plan"
+        timeout_in_minutes: 20
+        retry:
+          automatic:
+            - exit_status: -1
+              limit: 2
+
+      - block: ":white_check_mark: Approve UAT deploy"
+        key: "approve-uat"
+        depends_on:
+          - "plan-uat"
+          - "apply-dev"   # uat only after dev succeeded
+        branches: "main"
+        prompt: "Review the uat plan annotation above before approving."
+
+      - label: ":rocket: apply uat"
+        key: "apply-uat"
+        depends_on: "approve-uat"
+        branches: "main"
+        command: "bash .buildkite/scripts/tf.sh uat apply"
+        timeout_in_minutes: 30
+        concurrency: 1
+        concurrency_group: "bkdemo-storage/uat"
+
+  # ---------------------------------------------------------------- PROD
+  - group: ":red_circle: prod"
+    key: "prod"
+    steps:
+      - label: ":terraform: plan prod"
+        key: "plan-prod"
+        depends_on: "validate"
+        command: "bash .buildkite/scripts/tf.sh prod plan"
+        timeout_in_minutes: 20
+        retry:
+          automatic:
+            - exit_status: -1
+              limit: 2
+
+      - block: ":warning: Approve PRODUCTION deploy"
+        key: "approve-prod"
+        depends_on:
+          - "plan-prod"
+          - "apply-uat"   # prod only after uat succeeded
+        branches: "main"
+        prompt: "Review the prod plan annotation above. This changes production."
+        fields:
+          - text: "Change ticket"
+            key: "prod-change-ticket"
+            required: true
+            hint: "e.g. CHG0012345"
+
+      - label: ":rocket: apply prod"
+        key: "apply-prod"
+        depends_on: "approve-prod"
+        branches: "main"
+        command: "bash .buildkite/scripts/tf.sh prod apply"
+        timeout_in_minutes: 30
+        concurrency: 1
+        concurrency_group: "bkdemo-storage/prod"

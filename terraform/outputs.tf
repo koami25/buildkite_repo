@@ -1,15 +1,19 @@
+output "environment" {
+  value = var.environment
+}
+
 output "resource_group_name" {
-  value = azurerm_resource_group.buildkitedemo.name
+  value = azurerm_resource_group.this.name
 }
 
 output "storage_account_name" {
-  value = azurerm_storage_account.buildkitedemo.name
+  value = module.storage_account.name
 }
 
 output "storage_account_id" {
-  value = azurerm_storage_account.buildkitedemo.id
+  value = module.storage_account.id
 }
 
 output "primary_blob_endpoint" {
-  value = azurerm_storage_account.buildkitedemo.primary_blob_endpoint
+  value = module.storage_account.primary_blob_endpoint
 }

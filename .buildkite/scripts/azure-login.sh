@@ -5,8 +5,23 @@ set -euo pipefail
 
 # Strip stray whitespace/quotes that often sneak in when pasting secrets
 clean() { printf '%s' "$1" | tr -d '[:space:]"'"'"; }
-AZURE_CLIENT_ID=$(clean "$(buildkite-agent secret get AZURE_CLIENT_ID)")
-AZURE_TENANT_ID=$(clean "$(buildkite-agent secret get AZURE_TENANT_ID)")
+
+# Per-environment secrets (e.g. AZURE_CLIENT_ID_PROD) win over the shared ones,
+# so each environment can use its own managed identity and subscription.
+ENV_SUFFIX=$(printf '%s' "${TF_ENV:-}" | tr '[:lower:]' '[:upper:]')
+secret() {
+  local value=""
+  if [[ -n "$ENV_SUFFIX" ]]; then
+    value=$(buildkite-agent secret get "${1}_${ENV_SUFFIX}" 2>/dev/null || true)
+  fi
+  if [[ -z "$value" ]]; then
+    value=$(buildkite-agent secret get "$1" 2>/dev/null || true)
+  fi
+  clean "$value"
+}
+
+AZURE_CLIENT_ID=$(secret AZURE_CLIENT_ID)
+AZURE_TENANT_ID=$(secret AZURE_TENANT_ID)
 
 GUID_RE='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
 for name in AZURE_CLIENT_ID AZURE_TENANT_ID; do
@@ -27,9 +42,9 @@ TOKEN=$(buildkite-agent oidc request-token \
   --audience "api://AzureADTokenExchange" \
   --subject-claim cluster_id)
 
-# Subscription: use the AZURE_SUBSCRIPTION_ID secret if it exists,
-# otherwise look up the one subscription the service principal can see.
-AZURE_SUBSCRIPTION_ID=$(buildkite-agent secret get AZURE_SUBSCRIPTION_ID 2>/dev/null || true)
+# Subscription: use the AZURE_SUBSCRIPTION_ID[_ENV] secret if it exists,
+# otherwise look up the one subscription the identity can see.
+AZURE_SUBSCRIPTION_ID=$(secret AZURE_SUBSCRIPTION_ID)
 if [[ -z "$AZURE_SUBSCRIPTION_ID" ]]; then
   TOKEN_RESPONSE=$(curl -sS -X POST \
     "https://login.microsoftonline.com/$AZURE_TENANT_ID/oauth2/v2.0/token" \
@@ -69,4 +84,4 @@ export ARM_CLIENT_ID="$AZURE_CLIENT_ID"
 export ARM_TENANT_ID="$AZURE_TENANT_ID"
 export ARM_OIDC_TOKEN="$TOKEN"
 export ARM_SUBSCRIPTION_ID="$AZURE_SUBSCRIPTION_ID"
-echo "Using tenant $ARM_TENANT_ID, subscription $ARM_SUBSCRIPTION_ID"
+echo "Environment ${TF_ENV:-shared}: tenant $ARM_TENANT_ID, subscription $ARM_SUBSCRIPTION_ID"
