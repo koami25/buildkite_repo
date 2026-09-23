@@ -1,0 +1,29 @@
+# Teardown pipeline (separate from the deploy pipeline in buildkite.yaml).
+# Create a second Buildkite pipeline for this repo whose steps are:
+#   buildkite-agent pipeline upload .buildkite/destroy.yaml
+# and trigger it manually with "New Build" on main.
+#
+# Flow per environment: plan destroy -> type the env name to confirm -> destroy
+# "all" runs prod -> uat -> dev, each with its own confirmation.
+
+steps:
+  - input: ":bomb: What do you want to destroy?"
+    key: "destroy-input"
+    fields:
+      - select: "Environment"
+        key: "destroy-target"
+        required: true
+        options:
+          - label: "dev"
+            value: "dev"
+          - label: "uat"
+            value: "uat"
+          - label: "prod"
+            value: "prod"
+          - label: "all (prod -> uat -> dev)"
+            value: "all"
+
+  - label: ":pipeline: generate destroy steps"
+    key: "destroy-generate"
+    depends_on: "destroy-input"
+    command: "bash .buildkite/scripts/destroy-pipeline.sh"

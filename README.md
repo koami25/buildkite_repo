@@ -71,6 +71,28 @@ Set in the cluster's **Secrets**. An `_<ENV>` suffixed secret overrides the shar
 ## Making a change
 
 1. Edit `terraform/` on a branch and push; check the plan annotations.
-2. Merge to `main`; approve uat, then prod, in Buildkite.
+2. Merge to `main`; approve dev, then uat, then prod, in Buildkite.
 
 Local checks: `terraform -chdir=terraform fmt -recursive && terraform -chdir=terraform validate`.
+
+## Tearing down (destroy)
+
+Destroy is **not** part of the deploy pipeline. It lives in a separate, manually triggered pipeline so an environment can't be deleted by a stray click during a deploy.
+
+**One-time setup:** create a second Buildkite pipeline on this repo (e.g. `storage-destroy`) in the same cluster, with the steps:
+
+```yaml
+steps:
+  - command: buildkite-agent pipeline upload .buildkite/destroy.yaml
+```
+
+**To destroy:** New Build on `main` → pick `dev`, `uat`, `prod` or `all` → for each environment:
+
+```
+plan destroy → review annotation → type the env name to confirm (+ change ticket for prod) → destroy
+```
+
+- `all` runs **prod → uat → dev** (reverse of deploy), each confirmed separately.
+- The destroy step re-checks the typed name and aborts if it doesn't match.
+- Only runs from `main`, and shares the deploy concurrency group, so a destroy never overlaps a deploy of the same environment.
+- prod's delete lock is managed by Terraform and is removed as part of the destroy (the identity needs `User Access Administrator` or `Owner`).
