@@ -1,6 +1,32 @@
 env:
   TF_DIR: "terraform"
   TF_IN_AUTOMATION: "true"
+  TF_VERSION: "1.15.8"
+
+# The agent has no terraform binary, so download it once per agent and cache
+# it under $HOME. Reused at the start of every terraform step.
+install_terraform: &install_terraform |
+  set -euo pipefail
+  TF_BIN_DIR="$HOME/.terraform-bin/$TF_VERSION"
+  if [[ ! -x "$TF_BIN_DIR/terraform" ]]; then
+    case "$(uname -m)" in
+      x86_64|amd64)  TF_ARCH=amd64 ;;
+      aarch64|arm64) TF_ARCH=arm64 ;;
+      *) echo "Unsupported arch: $(uname -m)"; exit 1 ;;
+    esac
+    TF_ZIP="$(mktemp -d)/terraform.zip"
+    curl -fsSL -o "$TF_ZIP" \
+      "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_${TF_ARCH}.zip"
+    mkdir -p "$TF_BIN_DIR"
+    if command -v unzip >/dev/null; then
+      unzip -o -q "$TF_ZIP" terraform -d "$TF_BIN_DIR"
+    else
+      python3 -m zipfile -e "$TF_ZIP" "$TF_BIN_DIR"
+    fi
+    chmod +x "$TF_BIN_DIR/terraform"
+  fi
+  export PATH="$TF_BIN_DIR:$PATH"
+  terraform version
 
 # Each Buildkite step runs in a fresh shell, so the login does not carry over
 # between steps. This anchor is reused at the start of every step.
@@ -31,6 +57,7 @@ steps:
   - label: ":terraform: fmt & validate"
     key: "validate"
     commands:
+      - *install_terraform
       - terraform -chdir="$TF_DIR" fmt -check -recursive
       - terraform -chdir="$TF_DIR" init -backend=false -input=false
       - terraform -chdir="$TF_DIR" validate
@@ -39,6 +66,7 @@ steps:
     key: "plan"
     depends_on: "validate"
     commands:
+      - *install_terraform
       - *azure_login
       - *terraform_init
       - terraform -chdir="$TF_DIR" plan -input=false -out=tfplan
@@ -55,6 +83,7 @@ steps:
     depends_on: "approve"
     branches: "main"
     commands:
+      - *install_terraform
       - *azure_login
       - *terraform_init
       - buildkite-agent artifact download "terraform/tfplan" .
