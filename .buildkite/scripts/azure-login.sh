@@ -11,14 +11,25 @@ TOKEN=$(buildkite-agent oidc request-token --audience "api://AzureADTokenExchang
 # otherwise look up the one subscription the service principal can see.
 AZURE_SUBSCRIPTION_ID=$(buildkite-agent secret get AZURE_SUBSCRIPTION_ID 2>/dev/null || true)
 if [[ -z "$AZURE_SUBSCRIPTION_ID" ]]; then
-  ACCESS_TOKEN=$(curl -fsS -X POST \
+  TOKEN_RESPONSE=$(curl -sS -X POST \
     "https://login.microsoftonline.com/$AZURE_TENANT_ID/oauth2/v2.0/token" \
     --data-urlencode "client_id=$AZURE_CLIENT_ID" \
     --data-urlencode "grant_type=client_credentials" \
     --data-urlencode "scope=https://management.azure.com/.default" \
     --data-urlencode "client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer" \
-    --data-urlencode "client_assertion=$TOKEN" \
-    | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+    --data-urlencode "client_assertion=$TOKEN")
+  ACCESS_TOKEN=$(printf '%s' "$TOKEN_RESPONSE" | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+
+  if [[ -z "$ACCESS_TOKEN" ]]; then
+    echo "Azure rejected the Buildkite OIDC token:"
+    printf '%s' "$TOKEN_RESPONSE" | sed -n 's/.*"error_description":"\([^"]*\)".*/\1/p'
+    # Show the (non-secret) claims Azure matches against the federated credential
+    PAYLOAD=$(printf '%s' "$TOKEN" | cut -d. -f2 | tr '_-' '/+')
+    while (( ${#PAYLOAD} % 4 )); do PAYLOAD="$PAYLOAD="; done
+    echo "Token claims (compare with the app's federated credential):"
+    printf '%s' "$PAYLOAD" | base64 -d | grep -o '"\(iss\|sub\|aud\)":"[^"]*"'
+    exit 1
+  fi
 
   SUBSCRIPTIONS=$(curl -fsS -H "Authorization: Bearer $ACCESS_TOKEN" \
     "https://management.azure.com/subscriptions?api-version=2022-12-01" \
