@@ -22,12 +22,20 @@ terraform/
 
 ## Pipeline flow
 
+Environments run strictly in order. **Nothing is applied without manual approval.**
+
+```
+validate → plan dev  → APPROVE → apply dev
+         → plan uat  → APPROVE → apply uat
+         → plan prod → APPROVE + change ticket → apply prod
+```
+
 | Branch | What runs |
 |---|---|
-| any branch / PR | validate, then plan for dev, uat, prod (nothing is changed) |
-| `main` | dev applies automatically → **approve** uat → uat applies → **approve + change ticket** prod → prod applies |
+| `main` | the full flow above |
+| any other branch / PR | validate, then plan dev → uat → prod (approvals and applies are skipped, nothing is changed) |
 
-Each apply uses the exact plan file reviewed in the approval step. Plans are shown as annotations on the build page. Applies per environment never run in parallel.
+uat does not start until dev is applied, and prod does not start until uat is applied. Each apply uses the exact plan file shown in the approval step (plans appear as annotations on the build page). Applies per environment never run in parallel.
 
 ## Environments
 

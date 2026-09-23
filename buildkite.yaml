@@ -1,9 +1,13 @@
-# Storage account delivery pipeline: dev -> uat -> prod
+# Storage account delivery pipeline, strictly in order: dev -> uat -> prod
 #
-#   any branch : validate + plan for every environment (no changes applied)
-#   main       : dev applies automatically, uat and prod need manual approval,
-#                and each environment only deploys after the previous one succeeded
+#   main       : plan dev -> APPROVE -> apply dev
+#                -> plan uat -> APPROVE -> apply uat
+#                -> plan prod -> APPROVE (+ change ticket) -> apply prod
+#   any branch : validate and the three plans only (approvals/applies are skipped)
 #
+# Nothing is ever applied without a manual approval.
+# Approve/apply steps use `if:` rather than `branches:` so that when they are
+# skipped on other branches, later steps that depend on them still run.
 # Shell logic lives in .buildkite/scripts/ because `pipeline upload` replaces
 # variables in this file at upload time.
 
@@ -36,10 +40,16 @@ steps:
             - exit_status: -1
               limit: 2
 
+      - block: ":white_check_mark: Approve DEV deploy"
+        key: "approve-dev"
+        depends_on: "plan-dev"
+        if: build.branch == "main"
+        prompt: "Review the dev plan annotation before approving."
+
       - label: ":rocket: apply dev"
         key: "apply-dev"
-        depends_on: "plan-dev"
-        branches: "main"
+        depends_on: "approve-dev"
+        if: build.branch == "main"
         command: "bash .buildkite/scripts/tf.sh dev apply"
         timeout_in_minutes: 30
         concurrency: 1
@@ -48,10 +58,10 @@ steps:
   # ---------------------------------------------------------------- UAT
   - group: ":large_yellow_circle: uat"
     key: "uat"
+    depends_on: "dev"   # uat starts only after the whole dev group succeeded
     steps:
       - label: ":terraform: plan uat"
         key: "plan-uat"
-        depends_on: "validate"
         command: "bash .buildkite/scripts/tf.sh uat plan"
         timeout_in_minutes: 20
         retry:
@@ -61,16 +71,14 @@ steps:
 
       - block: ":white_check_mark: Approve UAT deploy"
         key: "approve-uat"
-        depends_on:
-          - "plan-uat"
-          - "apply-dev"   # uat only after dev succeeded
-        branches: "main"
-        prompt: "Review the uat plan annotation above before approving."
+        depends_on: "plan-uat"
+        if: build.branch == "main"
+        prompt: "Review the uat plan annotation before approving."
 
       - label: ":rocket: apply uat"
         key: "apply-uat"
         depends_on: "approve-uat"
-        branches: "main"
+        if: build.branch == "main"
         command: "bash .buildkite/scripts/tf.sh uat apply"
         timeout_in_minutes: 30
         concurrency: 1
@@ -79,10 +87,10 @@ steps:
   # ---------------------------------------------------------------- PROD
   - group: ":red_circle: prod"
     key: "prod"
+    depends_on: "uat"   # prod starts only after the whole uat group succeeded
     steps:
       - label: ":terraform: plan prod"
         key: "plan-prod"
-        depends_on: "validate"
         command: "bash .buildkite/scripts/tf.sh prod plan"
         timeout_in_minutes: 20
         retry:
@@ -92,11 +100,9 @@ steps:
 
       - block: ":warning: Approve PRODUCTION deploy"
         key: "approve-prod"
-        depends_on:
-          - "plan-prod"
-          - "apply-uat"   # prod only after uat succeeded
-        branches: "main"
-        prompt: "Review the prod plan annotation above. This changes production."
+        depends_on: "plan-prod"
+        if: build.branch == "main"
+        prompt: "Review the prod plan annotation. This changes production."
         fields:
           - text: "Change ticket"
             key: "prod-change-ticket"
@@ -106,7 +112,7 @@ steps:
       - label: ":rocket: apply prod"
         key: "apply-prod"
         depends_on: "approve-prod"
-        branches: "main"
+        if: build.branch == "main"
         command: "bash .buildkite/scripts/tf.sh prod apply"
         timeout_in_minutes: 30
         concurrency: 1
